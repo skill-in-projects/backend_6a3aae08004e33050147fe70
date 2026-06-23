@@ -1,0 +1,48 @@
+name: Deploy Backend to Railway
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Railway CLI
+        uses: bervProject/setup-railway@v2.0.0
+        with:
+          railway_token: ${{ secrets.RAILWAY_TOKEN }}
+
+      - name: Build .NET application
+        run: |
+          dotnet restore Backend.csproj
+          dotnet publish Backend.csproj -c Release -o ./out
+
+      - name: Run Tests
+        id: run_tests
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          dotnet test Tests/Tests.csproj -v minimal 2>&1 | tee /tmp/test_out.txt
+
+      - name: Report Test Results
+        if: always()
+        env:
+          BOARD_ID: "6a3aae08004e33050147fe70"
+          API_URL: "https://skill-in-backend-dvdmgbe7fmhmg4hp.eastus2-01.azurewebsites.net"
+          TEST_OUTCOME: ${{ steps.run_tests.outcome }}
+        run: |
+          python3 -c "import json,os,urllib.request as r; status='PASS' if os.environ.get('TEST_OUTCOME')=='success' else 'FAIL'; output=open('/tmp/test_out.txt').read()[:2000] if os.path.exists('/tmp/test_out.txt') else ''; body=json.dumps({'boardId':os.environ['BOARD_ID'],'devRole':'Backend','status':status,'output':output}).encode(); req=r.Request(os.environ['API_URL']+'/api/Mentor/test-results',data=body,headers={'Content-Type':'application/json'}); r.urlopen(req,timeout=10)" || true
+      - name: Deploy to Railway
+        env:
+          RAILWAY_SERVICE_ID: ${{ secrets.RAILWAY_SERVICE_ID }}
+        run: |
+          railway up --service $RAILWAY_SERVICE_ID --detach
